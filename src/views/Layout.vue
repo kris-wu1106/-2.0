@@ -35,7 +35,8 @@
       </nav>
 
       <div class="sb-foot">
-        <div class="foot-line">方案 A · 警务蓝「严谨交付」 · Vue 3 + Express + SQLite</div>
+        <div class="foot-line">宿舍智能交付与后勤管理平台 v2.0</div>
+        <div class="foot-line">© 2026 广西警察学院 · 后勤保障处</div>
       </div>
     </aside>
 
