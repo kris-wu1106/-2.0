@@ -27,12 +27,12 @@
           </el-form-item>
           <el-form-item label="楼栋优先级">
             <el-checkbox-group v-model="rules.buildingOrder">
-              <el-checkbox v-for="b in buildings" :key="b.code" :label="b.code" :value="b.code">{{ b.code }}（{{ b.gender }}）</el-checkbox>
+              <el-checkbox v-for="b in buildings" :key="b.code" :label="b.code" :value="b.code">{{ b.code }}（{{ b.gender === '混合' ? '男女混住' : b.gender }}）</el-checkbox>
             </el-checkbox-group>
           </el-form-item>
           <el-form-item label="硬约束（不可关闭）">
             <div class="hard-rules">
-              <span>性别与楼栋属性一致</span><span>仅可用房间的空闲床位</span><span>维修/预留床位不参与</span><span>一人一床</span>
+              <span>性别与楼栋/房间属性一致（混合楼按房间）</span><span>仅可用房间的空闲床位</span><span>维修/预留床位不参与</span><span>一人一床</span>
             </div>
           </el-form-item>
         </el-form>

@@ -114,7 +114,7 @@ app.get('/api/rooms', auth, (req, res) => {
 
   const bedStmt = db.prepare(`
     SELECT b.id, b.bed_no, b.status, b.note,
-           s.id AS student_id, s.name AS student_name, s.student_no, s.class_name
+           s.id AS student_id, s.name AS student_name, s.student_no, s.class_name, s.gender AS student_gender
     FROM beds b LEFT JOIN students s ON s.id = b.student_id
     WHERE b.room_id = ? ORDER BY b.bed_no
   `)
@@ -164,8 +164,15 @@ app.post('/api/beds/:id/checkin', auth, requireAdmin, (req, res) => {
 
   const student = db.prepare('SELECT * FROM students WHERE id = ?').get(Number(req.body?.studentId))
   if (!student) return res.status(400).json({ message: '请选择入住学生' })
-  if (student.gender !== bed.building_gender) {
+  if (bed.building_gender !== '混合' && student.gender !== bed.building_gender) {
     return res.status(400).json({ message: `性别冲突：${bed.building_name}为${bed.building_gender}生楼栋，${student.name}为${student.gender}生` })
+  }
+  if (bed.building_gender === '混合') {
+    const clash = db.prepare(`
+      SELECT s.gender AS g FROM beds b2 JOIN students s ON s.id = b2.student_id
+      WHERE b2.room_id = ? AND b2.status = '已占用' AND s.gender <> ? LIMIT 1
+    `).get(bed.room_id, student.gender)
+    if (clash) return res.status(400).json({ message: `性别冲突：房间 ${bed.building_code}-${bed.room_no} 已有${clash.g}生入住，混合楼按房间安排性别` })
   }
   const occupied = db.prepare("SELECT COUNT(*) c FROM beds WHERE student_id = ? AND status = '已占用'").get(student.id).c
   if (occupied > 0) return res.status(400).json({ message: `${student.name} 已有在住床位，请先办理退宿` })

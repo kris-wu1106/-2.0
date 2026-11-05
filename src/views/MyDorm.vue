@@ -135,7 +135,7 @@
         <el-form-item label="申请理由" required>
           <el-input v-model="move.reason" type="textarea" :rows="3" placeholder="简要说明调宿原因（宿管与辅导员审批时会看到）" />
         </el-form-item>
-        <p class="move-tip">空床数据实时读取台账：仅展示与你性别一致的楼栋，已被占用的床位不会出现在可选列表中；提交后床位被他人先占，系统会提示重新选择。</p>
+        <p class="move-tip">空床数据实时读取台账：展示与你性别一致的楼栋及混合楼（6/7 栋）的可住房间，混合楼内已有异性入住的房间不可选；提交后床位被他人先占，系统会提示重新选择。</p>
       </el-form>
       <template #footer>
         <el-button @click="moveVisible = false">取消</el-button>

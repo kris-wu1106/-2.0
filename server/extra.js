@@ -374,6 +374,19 @@ function studentById(id) {
   return db.prepare('SELECT * FROM students WHERE id = ?').get(id)
 }
 
+/**
+ * 混合楼（男女混住）按「房间」定性别：房间内已有在住学生时性别跟随在住学生，
+ * 空房间两性均可入住。返回 true 表示该性别学生可入住此房间。
+ */
+function roomGenderOk(roomId, gender) {
+  const row = db.prepare(`
+    SELECT s.gender AS g FROM beds b JOIN students s ON s.id = b.student_id
+    WHERE b.room_id = ? AND b.status = '已占用' AND s.gender <> ?
+    LIMIT 1
+  `).get(roomId, gender)
+  return !row
+}
+
 function bedOfStudent(studentId) {
   return db.prepare(`
     SELECT b.id AS bed_id, b.bed_no, r.room_no, r.id AS room_id, bl.code AS building_code, bl.name AS building_name, bl.id AS building_id
@@ -425,8 +438,11 @@ router.get('/free-beds', (req, res) => {
   if (!stu) return res.status(404).json({ message: '学生档案不存在' })
 
   const code = String(req.query.building || '').trim()
-  const params = [stu.gender]
-  let where = "b.status = '空闲' AND r.status = '可用' AND bl.gender = ?"
+  const params = [stu.gender, stu.gender]
+  // 同性别楼栋 + 混合楼（6/7 栋）中无异性在住的房间
+  let where = `b.status = '空闲' AND r.status = '可用' AND (bl.gender = ? OR bl.gender = '混合')
+    AND NOT EXISTS (SELECT 1 FROM beds b2 JOIN students s2 ON s2.id = b2.student_id
+                    WHERE b2.room_id = r.id AND b2.status = '已占用' AND s2.gender <> ?)`
   if (code) { where += ' AND bl.code = ?'; params.push(code) }
 
   const rows = db.prepare(`
@@ -529,7 +545,8 @@ router.post('/tickets', archiveGuard, requireRole('student'), (req, res) => {
     if (!code || !roomNo) return res.status(400).json({ message: '请选择意向楼栋与房间号' })
     const room = db.prepare('SELECT r.*, bl.gender AS bg, bl.name AS bname FROM rooms r JOIN buildings bl ON bl.id = r.building_id WHERE bl.code = ? AND r.room_no = ?').get(code, roomNo)
     if (!room) return res.status(400).json({ message: `目标房间 ${code}-${roomNo} 不存在` })
-    if (room.bg !== stu.gender) return res.status(400).json({ message: '目标楼栋性别属性与学生不符，校验不通过' })
+    if (room.bg !== '混合' && room.bg !== stu.gender) return res.status(400).json({ message: '目标楼栋性别属性与学生不符，校验不通过' })
+    if (room.bg === '混合' && !roomGenderOk(room.id, stu.gender)) return res.status(400).json({ message: '目标房间已有异性学生入住，不可申请' })
     if (room.status !== '可用') return res.status(400).json({ message: `目标房间当前状态为「${room.status}」，不可申请` })
     // 学生自选床位：必须属于目标房间且仍空闲，避免提交瞬间被他人占用
     if (targetBedId) {
@@ -585,7 +602,8 @@ router.post('/tickets/:id/action', archiveGuard, requireRole('admin', 'counselor
         const [code, roomNo] = target.split('-')
         const room = db.prepare('SELECT r.*, bl.gender AS building_gender FROM rooms r JOIN buildings bl ON bl.id = r.building_id WHERE bl.code = ? AND r.room_no = ?').get(code, roomNo)
         if (!room) return res.status(400).json({ message: `目标房间 ${target} 不存在` })
-        if (room.building_gender !== stu.gender) return res.status(400).json({ message: '目标楼栋性别与学生不符' })
+        if (room.building_gender !== '混合' && room.building_gender !== stu.gender) return res.status(400).json({ message: '目标楼栋性别与学生不符' })
+        if (room.building_gender === '混合' && !roomGenderOk(room.id, stu.gender)) return res.status(400).json({ message: '目标房间已有异性学生入住，无法执行调宿' })
         // 优先分配学生指定的床位；该床若已被占用则回退到房间内任一空床
         const picked = t.target_bed
           ? db.prepare("SELECT * FROM beds WHERE id = ? AND room_id = ? AND status = '空闲'").get(t.target_bed, room.id)
@@ -1037,11 +1055,12 @@ router.post('/import/validate', (req, res) => {
     if (bCode) {
       building = buildings.find((b) => b.code === bCode)
       if (!building) errors.push({ ruleId: 'R07', level: 'E', field: '楼栋', value: bCode, message: `楼栋 ${bCode} 不存在`, suggestion: buildings.map((b) => b.code).join(' / ') })
-      else if (gender && building.gender !== gender) errors.push({ ruleId: 'R08', level: 'E', field: '性别/楼栋', value: `${gender} → ${bCode}`, message: `性别冲突：${bCode} 为${building.gender}生楼栋`, suggestion: buildings.filter((b) => b.gender === building.gender).map((b) => b.code).join(' / ') })
+      else if (gender && building.gender !== '混合' && building.gender !== gender) errors.push({ ruleId: 'R08', level: 'E', field: '性别/楼栋', value: `${gender} → ${bCode}`, message: `性别冲突：${bCode} 为${building.gender}生楼栋`, suggestion: buildings.filter((b) => b.gender === building.gender || b.gender === '混合').map((b) => b.code).join(' / ') })
     }
     if (building && roomNo) {
       room = db.prepare('SELECT * FROM rooms WHERE building_id = ? AND room_no = ?').get(building.id, roomNo)
       if (!room) errors.push({ ruleId: 'R09', level: 'E', field: '房间号', value: roomNo, message: `${bCode} 栋不存在房间 ${roomNo}`, suggestion: '请核对楼层房号规则（如 201）' })
+      else if (building.gender === '混合' && gender && !roomGenderOk(room.id, gender)) errors.push({ ruleId: 'R08', level: 'E', field: '性别/楼栋', value: `${gender} → ${bCode}-${roomNo}`, message: `性别冲突：房间 ${bCode}-${roomNo} 已有异性学生入住（混合楼按房间定性别）`, suggestion: '选择同楼层同性别房间' })
     }
     if (room && bedNo) {
       const n = Number(bedNo)
@@ -1181,10 +1200,12 @@ router.post('/allocations/generate', archiveGuard, requireRole('admin'), (req, r
   })
 
   const roomMembers = new Map() // room_id -> 已有班级集合（含已入住）
-  db.prepare("SELECT r.id AS room_id, s.class_name FROM beds b JOIN rooms r ON r.id = b.room_id JOIN students s ON s.id = b.student_id WHERE b.status = '已占用'").all()
+  const roomGender = new Map()  // room_id -> 已入住学生性别（混合楼按房间定性别）
+  db.prepare("SELECT r.id AS room_id, s.class_name, s.gender FROM beds b JOIN rooms r ON r.id = b.room_id JOIN students s ON s.id = b.student_id WHERE b.status = '已占用'").all()
     .forEach((r) => {
       if (!roomMembers.has(r.room_id)) roomMembers.set(r.room_id, new Set())
       roomMembers.get(r.room_id).add(r.class_name)
+      roomGender.set(r.room_id, r.gender)
     })
 
   const plan = []
@@ -1192,8 +1213,17 @@ router.post('/allocations/generate', archiveGuard, requireRole('admin'), (req, r
   const usedBeds = new Set()
 
   for (const stu of unassigned) {
-    const candidates = freeBeds.filter((f) => f.gender === stu.gender && !usedBeds.has(f.bed_id) && !reserved.has(f.bed_id))
-    if (!candidates.length) { unassignable.push({ student: stu, reason: '容量不足（同性别楼栋无空闲床位）' }); continue }
+    const candidates = freeBeds.filter((f) => {
+      if (usedBeds.has(f.bed_id) || reserved.has(f.bed_id)) return false
+      if (f.gender === stu.gender) return true
+      // 混合楼：房间无在住学生或已有同性学生在住时可入住
+      if (f.gender === '混合') {
+        const g = roomGender.get(f.room_id)
+        return !g || g === stu.gender
+      }
+      return false
+    })
+    if (!candidates.length) { unassignable.push({ student: stu, reason: '容量不足（同性别可住楼栋无空闲床位）' }); continue }
     let best = null
     let bestScore = -Infinity
     for (const c of candidates) {
@@ -1207,10 +1237,11 @@ router.post('/allocations/generate', archiveGuard, requireRole('admin'), (req, r
       score += Math.max(0, 10 - c.bed_no)                             // 床位顺序
       if (score > bestScore) { bestScore = score; best = c }
     }
-    if (!best) { unassignable.push({ student: stu, reason: '容量不足（同性别楼栋无空闲床位）' }); continue }
+    if (!best) { unassignable.push({ student: stu, reason: '容量不足（同性别可住楼栋无空闲床位）' }); continue }
     usedBeds.add(best.bed_id)
     if (!roomMembers.has(best.room_id)) roomMembers.set(best.room_id, new Set())
     roomMembers.get(best.room_id).add(stu.class_name)
+    roomGender.set(best.room_id, stu.gender)
     plan.push({ student: stu, bed: best })
   }
 
@@ -1307,12 +1338,14 @@ router.get('/allocations/:id/free-beds', (req, res) => {
     LEFT JOIN allocation_items i2 ON i2.allocation_id = ? AND i2.bed_id = b.id
     LEFT JOIN students ps ON ps.id = i2.student_id
     LEFT JOIN students s2 ON s2.id = b.student_id
-    WHERE bl.gender = ?
+    WHERE (bl.gender = ? OR bl.gender = '混合')
       AND r.status = '可用'
       AND (b.status = '空闲' OR i2.id IS NOT NULL)
       AND b.id NOT IN (SELECT bed_id FROM allocation_items WHERE allocation_id = ? AND student_id = ?)
+      AND NOT EXISTS (SELECT 1 FROM beds b3 JOIN students s3 ON s3.id = b3.student_id
+                      WHERE b3.room_id = r.id AND b3.status = '已占用' AND s3.gender <> ?)
     ORDER BY bl.code, r.room_no, b.bed_no
-  `).all(id, stu.gender, id, Number(studentId))
+  `).all(id, stu.gender, id, Number(studentId), stu.gender)
   res.json(rows.map((r) => ({
     ...r,
     label: `${r.building_code}-${r.room_no}-${r.bed_no}号床` + (r.holder ? `（与方案内 ${r.holder} 对调）` : '（空闲）')
@@ -1331,8 +1364,17 @@ router.post('/allocations/:id/move', archiveGuard, requireRole('admin'), (req, r
   if (!stu || !item) return res.status(404).json({ message: '该学生不在本方案中' })
   const bed = db.prepare('SELECT b.*, r.status AS room_status, bl.gender AS bg FROM beds b JOIN rooms r ON r.id = b.room_id JOIN buildings bl ON bl.id = r.building_id WHERE b.id = ?').get(Number(toBedId))
   if (!bed) return res.status(404).json({ message: '目标床位不存在' })
-  if (bed.bg !== stu.gender) return res.status(400).json({ message: '冲突校验：目标楼栋性别与学生不符' })
+  if (bed.bg !== '混合' && bed.bg !== stu.gender) return res.status(400).json({ message: '冲突校验：目标楼栋性别与学生不符' })
   if (bed.room_status !== '可用') return res.status(400).json({ message: `冲突校验：目标房间状态为「${bed.room_status}」` })
+  if (bed.bg === '混合') {
+    if (!roomGenderOk(bed.room_id, stu.gender)) {
+      return res.status(400).json({ message: '冲突校验：目标房间已有异性学生入住（混合楼按房间定性别）' })
+    }
+    const otherItem = db.prepare('SELECT ai.*, s.gender AS og FROM allocation_items ai JOIN students s ON s.id = ai.student_id WHERE ai.allocation_id = ? AND ai.bed_id = ?').get(id, Number(toBedId))
+    if (otherItem && otherItem.og !== stu.gender) {
+      return res.status(400).json({ message: '冲突校验：对调目标与学生性别不同，不能同住一间' })
+    }
+  }
 
   const other = db.prepare('SELECT * FROM allocation_items WHERE allocation_id = ? AND bed_id = ?').get(id, Number(toBedId))
   db.exec('BEGIN')

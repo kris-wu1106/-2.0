@@ -91,7 +91,9 @@ export function verifyPassword(pwd, stored) {
 }
 
 const SURNAMES = ['王', '李', '张', '刘', '陈', '杨', '赵', '黄', '周', '吴', '徐', '孙', '马', '朱', '胡', '郭', '何', '高', '林', '罗', '梁', '宋', '郑', '谢', '韩', '唐', '冯', '于', '董', '萧', '程', '曹', '袁', '邓', '许', '傅', '沈', '曾', '彭', '吕', '苏', '卢', '蒋', '蔡', '贾', '丁', '魏', '薛', '叶', '阎', '余', '潘', '杜', '戴', '夏', '钟', '汪', '田', '任', '姜']
-const GIVEN = ['子涵', '雨轩', '思远', '嘉怡', '俊杰', '欣怡', '浩然', '梓萱', '宇轩', '若曦', '明轩', '诗涵', '天佑', '文博', '佳琪', '泽宇', '芷若', '子豪', '梦瑶', '博文', '晨曦', '亦辰', '曼婷', '皓轩']
+// 名字按性别分库，避免「女俊杰」「男梦瑶」这类姓名与性别不符的演示数据
+const GIVEN_M = ['子涵', '雨轩', '思远', '俊杰', '浩然', '宇轩', '天佑', '文博', '泽宇', '子豪', '博文', '亦辰', '皓轩', '明轩', '志远', '振华', '少杰', '建军', '耀祖', '俊驰']
+const GIVEN_F = ['嘉怡', '欣怡', '梓萱', '若曦', '诗涵', '佳琪', '芷若', '梦瑶', '晨曦', '曼婷', '雨桐', '静怡', '淑雅', '晓菲', '燕妮', '婉清', '语嫣', '思彤', '慧敏', '雅琴']
 // 公安院校按「区队」编制：同一年级每个专业一般只编 1-2 个区队（2401、2402）
 // 一个区队 42 人，正好住满 7 间六人间
 const SQUAD_PLAN = [
@@ -103,7 +105,8 @@ const SQUAD_PLAN = [
   ['法学', 0, 2], ['行政管理', 0, 2]
 ]
 const SQUAD_SIZE = 42
-const SQUADS_PER_BUILDING = 4
+const SQUADS_PER_BUILDING = 3          // 单性别楼每栋安排的区队数
+const SQUADS_PER_MIXED_SECTION = 2     // 混合楼每个性别段（低 3 层男生 / 高 3 层女生）安排的区队数
 const SQUADS = (() => {
   const out = []
   for (const [major, maleN, femaleN] of SQUAD_PLAN) {
@@ -131,8 +134,8 @@ function seedBuildings() {
     ['3', '仙葫校区 3 栋', '男', 6, '孙立平'],
     ['4', '仙葫校区 4 栋', '女', 6, '张慧敏'],
     ['5', '仙葫校区 5 栋', '女', 6, '赵丽娟'],
-    ['6', '仙葫校区 6 栋', '女', 6, '李红梅'],
-    ['7', '仙葫校区 7 栋', '女', 6, '周雅琴']
+    ['6', '仙葫校区 6 栋', '混合', 6, '李红梅'],
+    ['7', '仙葫校区 7 栋', '混合', 6, '周雅琴']
   ]
   const insertB = db.prepare('INSERT INTO buildings (code, name, gender, floors, manager) VALUES (?, ?, ?, ?, ?)')
   const insertR = db.prepare('INSERT INTO rooms (building_id, floor, room_no, room_type, capacity) VALUES (?, ?, ?, ?, ?)')
@@ -153,10 +156,13 @@ function seedBuildings() {
 function seedStudents() {
   const insert = db.prepare('INSERT INTO students (student_no, name, gender, class_name, grade, phone) VALUES (?, ?, ?, ?, ?, ?)')
   let i = 0
+  const nameSeq = { 男: 0, 女: 0 } // 按性别各自编号，姓名从对应名字库取
   for (const squad of SQUADS) {
     // 一个区队 42 人，整建制编制，区队内性别一致
     for (let k = 0; k < SQUAD_SIZE; k++, i++) {
-      const name = SURNAMES[Math.floor(i / GIVEN.length) % SURNAMES.length] + GIVEN[i % GIVEN.length]
+      const list = squad.gender === '男' ? GIVEN_M : GIVEN_F
+      const seq = nameSeq[squad.gender]++
+      const name = SURNAMES[Math.floor(seq / list.length) % SURNAMES.length] + list[seq % list.length]
       const no = `2026${String(1001 + i).padStart(4, '0')}`
       const phone = `138${String(10000000 + i * 137).slice(0, 8)}`
       insert.run(no, name, squad.gender, squad.name, '26级', phone)
@@ -166,9 +172,9 @@ function seedStudents() {
 
 function seedOccupancy() {
   const setBed = db.prepare('UPDATE beds SET status = ?, student_id = ? WHERE id = ?')
-  const roomsOfBuilding = db.prepare('SELECT id FROM rooms WHERE building_id = ? ORDER BY floor, room_no')
+  const roomsOfBuilding = db.prepare('SELECT id, floor FROM rooms WHERE building_id = ? ORDER BY floor, room_no')
   const bedsOfRoom = db.prepare('SELECT id FROM beds WHERE room_id = ? ORDER BY bed_no')
-  const buildings = db.prepare('SELECT id, code, gender FROM buildings ORDER BY code').all()
+  const buildings = db.prepare('SELECT id, code, gender, floors FROM buildings ORDER BY code').all()
   const students = db.prepare('SELECT id, gender, class_name FROM students ORDER BY id').all()
 
   // 区队 → 学生名单（同区队同性别，按生成顺序保持连续）
@@ -187,33 +193,50 @@ function seedOccupancy() {
   // 每栋楼剩余房间的用途，保证楼栋之间的空床结构一致
   const sparePlan = ['预留', '维修', '空闲', '空闲', '空闲', '预留', '空闲', '空闲']
 
-  let occupied = 0
-  for (const g of ['男', '女']) {
-    const pool = queue.filter((s) => s.gender === g)
-    let sIdx = 0
-    for (const b of buildings.filter((x) => x.gender === g)) {
-      const rooms = roomsOfBuilding.all(b.id)
-      // 每栋楼容纳 4 个完整区队，一个区队独占连续的 7 间房
-      for (let k = 0; k < SQUADS_PER_BUILDING && sIdx < pool.length; k++, sIdx++) {
-        const squad = pool[sIdx]
-        let p = 0
-        for (let r = k * roomsPerSquad; r < (k + 1) * roomsPerSquad && r < rooms.length; r++) {
-          for (const bed of bedsOfRoom.all(rooms[r].id)) {
-            if (p < squad.ids.length) {
-              setBed.run('已占用', squad.ids[p++], bed.id)
-              occupied++
-            }
+  // 按性别维护待入住区队队列（混合楼男女区队都要往里放）
+  const pool = { 男: queue.filter((s) => s.gender === '男'), 女: queue.filter((s) => s.gender === '女') }
+  const poolIdx = { 男: 0, 女: 0 }
+
+  const fillSection = (rooms, gender, squadsInSection) => {
+    let used = 0
+    for (let k = 0; k < squadsInSection && poolIdx[gender] < pool[gender].length; k++, poolIdx[gender]++) {
+      const squad = pool[gender][poolIdx[gender]]
+      let p = 0
+      for (let r = k * roomsPerSquad; r < (k + 1) * roomsPerSquad && r < rooms.length; r++) {
+        for (const bed of bedsOfRoom.all(rooms[r].id)) {
+          if (p < squad.ids.length) {
+            setBed.run('已占用', squad.ids[p++], bed.id)
+            occupied++
           }
         }
       }
-      // 剩余房间：预留 / 整间维修 / 空闲
-      for (let r = SQUADS_PER_BUILDING * roomsPerSquad; r < rooms.length; r++) {
-        const kind = sparePlan[(r - SQUADS_PER_BUILDING * roomsPerSquad) % sparePlan.length]
-        for (const bed of bedsOfRoom.all(rooms[r].id)) {
-          setBed.run(kind === '维修' ? '维修' : kind, null, bed.id)
-        }
-        if (kind === '维修') db.prepare("UPDATE rooms SET status = '维修', note = '卫生间漏水维修' WHERE id = ?").run(rooms[r].id)
+      used = (k + 1) * roomsPerSquad
+    }
+    return used
+  }
+
+  const markSpare = (rooms, from) => {
+    for (let r = from; r < rooms.length; r++) {
+      const kind = sparePlan[(r - from) % sparePlan.length]
+      for (const bed of bedsOfRoom.all(rooms[r].id)) {
+        setBed.run(kind === '维修' ? '维修' : kind, null, bed.id)
       }
+      if (kind === '维修') db.prepare("UPDATE rooms SET status = '维修', note = '卫生间漏水维修' WHERE id = ?").run(rooms[r].id)
+    }
+  }
+
+  let occupied = 0
+  for (const b of buildings) {
+    const rooms = roomsOfBuilding.all(b.id)
+    if (b.gender === '混合') {
+      // 6、7 栋男女混住：低 3 层男生区队、高 3 层女生区队，同层同性别
+      const lowFloors = rooms.filter((r) => r.floor <= Math.ceil(b.floors / 2))
+      const highFloors = rooms.filter((r) => r.floor > Math.ceil(b.floors / 2))
+      markSpare(lowFloors, fillSection(lowFloors, '男', SQUADS_PER_MIXED_SECTION))
+      markSpare(highFloors, fillSection(highFloors, '女', SQUADS_PER_MIXED_SECTION))
+    } else {
+      // 单性别楼：每栋安排若干完整区队，一个区队独占连续的 7 间房
+      markSpare(rooms, fillSection(rooms, b.gender, SQUADS_PER_BUILDING))
     }
   }
 

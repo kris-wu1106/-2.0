@@ -59,7 +59,7 @@
           @click="switchBuilding(b)"
         >
           <span class="b-code">{{ b.code }}</span>
-          <span class="b-gender" :class="b.gender === '男' ? 'male' : 'female'">{{ b.gender }}</span>
+          <span class="b-gender" :class="b.gender === '男' ? 'male' : (b.gender === '女' ? 'female' : 'mixed')">{{ b.gender === '混合' ? '男女混住' : b.gender }}</span>
         </button>
       </div>
       <div class="filters">
@@ -197,7 +197,7 @@
     <el-dialog v-model="checkin.visible" title="办理入住" width="520px" destroy-on-close>
       <div class="dlg-bed">
         <span class="dlg-bed-no">{{ checkin.roomNo }} · {{ checkin.bedNo }}号床</span>
-        <el-tag size="small" effect="plain">{{ currentBuilding?.name }} {{ currentBuilding?.gender }}生</el-tag>
+        <el-tag size="small" effect="plain">{{ currentBuilding?.name }} {{ currentBuilding?.gender === '混合' ? '男女混住（按房间安排性别）' : currentBuilding?.gender + '生' }}</el-tag>
       </div>
       <el-form label-width="82px" label-position="left">
         <el-form-item label="入住学生" required>
@@ -229,7 +229,7 @@
           <el-input v-model="checkin.reason" placeholder="如：插班生补录 / 退宿后重新入住" />
         </el-form-item>
       </el-form>
-      <p class="dlg-tip">系统将校验：床位空闲、房间可用、性别与楼栋属性一致、学生无其他在住床位。</p>
+      <p class="dlg-tip">系统将校验：床位空闲、房间可用、性别与楼栋属性一致（混合楼按房间实际入住性别）、学生无其他在住床位。</p>
       <template #footer>
         <el-button @click="checkin.visible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="submitCheckin">确认入住</el-button>
@@ -307,7 +307,7 @@ const floorList = computed(() => {
   return Array.from({ length: n }, (_, i) => i + 1)
 })
 
-const checkin = reactive({ visible: false, bedId: null, bedNo: '', roomNo: '', studentId: null, reason: '' })
+const checkin = reactive({ visible: false, bedId: null, bedNo: '', roomNo: '', roomGender: '', studentId: null, reason: '' })
 const checkout = reactive({ visible: false, bedId: null, bedNo: '', roomNo: '', studentName: '', reason: '' })
 const stateDialog = reactive({ visible: false, bedId: null, bedNo: '', roomNo: '', status: '预留', reason: '' })
 const audit = reactive({ visible: false, list: [] })
@@ -370,8 +370,11 @@ function selectFloor(f) {
 async function searchStudents(keyword) {
   studentLoading.value = true
   try {
+    // 单性别楼按楼栋性别筛选；混合楼按目标房间的实际入住性别筛选（空房间不限制）
+    let gender = currentBuilding.value?.gender || ''
+    if (gender === '混合') gender = checkin.roomGender || ''
     studentOptions.value = await api.get('/students', {
-      params: { keyword, gender: currentBuilding.value?.gender || '' }
+      params: { keyword, gender }
     })
   } finally {
     studentLoading.value = false
@@ -380,7 +383,9 @@ async function searchStudents(keyword) {
 
 function onBedCommand(cmd, bed, room) {
   if (cmd === 'checkin') {
-    Object.assign(checkin, { visible: true, bedId: bed.id, bedNo: bed.bed_no, roomNo: room.room_no, studentId: null, reason: '' })
+    // 混合楼：取该房间已有在住学生的性别，作为入住候选的筛选条件
+    const occupant = (room.beds || []).find((x) => x.status === '已占用' && x.student_gender)
+    Object.assign(checkin, { visible: true, bedId: bed.id, bedNo: bed.bed_no, roomNo: room.room_no, roomGender: occupant?.student_gender || '', studentId: null, reason: '' })
     studentOptions.value = []
     searchStudents('')
   } else if (cmd === 'checkout') {
@@ -458,6 +463,7 @@ onMounted(async () => {
 .b-gender { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
 .b-gender.male { background: #eaf1fe; color: #2456a6; }
 .b-gender.female { background: #fdeef2; color: #c9446a; }
+.b-gender.mixed { background: #fdf3e3; color: #b8860b; }
 .filters { display: flex; gap: 8px; align-items: center; }
 
 .body-grid { display: grid; grid-template-columns: 150px 1fr; gap: 14px; align-items: start; }

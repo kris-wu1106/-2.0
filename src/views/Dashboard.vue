@@ -128,7 +128,7 @@
         <div v-for="b in o.buildingStats" :key="b.id" class="b-row">
           <div class="b-id">
             <strong>{{ b.code }}</strong>
-            <el-tag size="small" :type="b.gender === '男' ? 'primary' : 'danger'" effect="plain">{{ b.gender }}</el-tag>
+            <el-tag size="small" :type="b.gender === '男' ? 'primary' : (b.gender === '女' ? 'danger' : 'warning')" effect="plain">{{ b.gender === '混合' ? '混住' : b.gender }}</el-tag>
           </div>
           <div class="b-name">{{ b.name }}</div>
           <div class="b-bar"><div class="b-fill" :style="{ width: b.rate + '%' }"></div></div>
