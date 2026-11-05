@@ -18,6 +18,10 @@
               <div class="ms-label">当前状态</div>
               <div class="ms-state" :class="stateClass(myState.state)">{{ myState.state }}</div>
               <div class="ms-note">{{ myState.note || '无异常记录' }}</div>
+              <div v-if="myState.leave" class="ms-leave">
+                {{ myState.leave.status === '已通过' ? '请假已批准' : '请假申请待审批' }}：{{ myState.leave.leave_type }}
+                {{ myState.leave.start_date }} ~ {{ myState.leave.end_date }}（{{ myState.leave.days }} 天）
+              </div>
             </div>
             <el-tag size="small" effect="plain">数据只读</el-tag>
           </div>
@@ -81,7 +85,7 @@
           <el-tab-pane label="状态看板" name="board">
             <div class="board-head">
               <div class="board-legend">
-                <span v-for="s in ['未归', '晚归', '请假外出', '离校实习', '在宿']" :key="s" class="lg" :class="stateClass(s)">{{ s }}</span>
+                <span v-for="s in ['未归', '晚归', '请假离宿', '离校实习', '在宿']" :key="s" class="lg" :class="stateClass(s)">{{ s }}</span>
               </div>
               <span class="hint">按班内状态排序，异常项置顶 · 共 {{ board.length }} 名学生</span>
             </div>
@@ -130,22 +134,28 @@ const tab = ref('leaves')
 const leaves = ref([])
 const board = ref([])
 const myLeaves = ref([])
-const myState = reactive({ state: '在宿', note: '' })
+const myState = reactive({ state: '在宿', note: '', leave: null })
 const dialog = reactive({ visible: false, leave_type: '事假', range: [], reason: '' })
 
 function stateClass(s) {
   return {
-    '未归': 'danger', '晚归': 'warn', '请假外出': 'leave', '离校实习': 'away', '在宿': 'ok'
+    '未归': 'danger', '晚归': 'warn', '请假离宿': 'leave', '请假外出': 'leave', '离校实习': 'away', '在宿': 'ok'
   }[s] || 'ok'
 }
 
 async function load() {
   if (isStudent) {
-    const all = await api.get('/leaves')
-    myLeaves.value = all.slice(0, 8)
-    const b = await api.get('/status-board').catch(() => [])
-    const me = b.find((x) => x.student_no === (JSON.parse(localStorage.getItem('dorm_user') || '{}').username || ''))
-    if (me) { myState.state = me.state; myState.note = me.note || '' }
+    // 状态由后端按登录身份直接取，不再用账号去匹配学号（两者格式不同）
+    const [mine, st] = await Promise.all([
+      api.get('/leaves'),
+      api.get('/my-status').catch(() => null)
+    ])
+    myLeaves.value = mine.slice(0, 8)
+    if (st) {
+      myState.state = st.state || '在宿'
+      myState.leave = st.leave || null
+      myState.note = st.note || (st.leave ? `${st.leave.leave_type} ${st.leave.days} 天 · ${st.leave.status}` : '')
+    }
     return
   }
   leaves.value = await api.get('/leaves')
@@ -197,6 +207,7 @@ onMounted(load)
 .ms-state.leave { color: #2456a6; }
 .ms-state.away { color: #7b8aa3; }
 .ms-note { font-size: 12px; color: var(--ink-2); }
+.ms-leave { margin-top: 8px; font-size: 11px; color: #5b7ba8; background: #f4f8ff; border: 1px solid #e2ecfb; border-radius: 5px; padding: 6px 9px; line-height: 1.6; }
 .ms-tip { margin-top: 16px; font-size: 11px; color: var(--ink-3); line-height: 1.7; border-top: 1px dashed var(--line); padding-top: 10px; }
 .tabs-panel { padding: 6px 16px 16px; }
 .stu-cell strong { font-size: 12.5px; display: block; font-weight: 500; }

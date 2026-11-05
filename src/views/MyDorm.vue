@@ -19,7 +19,18 @@
             <div class="dc-room">{{ dorm.building_code }} · {{ dorm.room_no }}</div>
             <div class="dc-sub">{{ dorm.building_name }} · {{ dorm.floor }} 层 · {{ dorm.room_type }}</div>
           </div>
-          <el-tag type="success" effect="dark" round>{{ dorm.bed_no }} 号床</el-tag>
+          <div class="dc-tags">
+            <el-tag
+              v-if="myStatus.state && myStatus.state !== '在宿'"
+              :type="myStatus.state === '请假离宿' || myStatus.state === '请假外出' ? 'warning' : 'danger'"
+              effect="dark"
+              round
+            >{{ myStatus.state }}</el-tag>
+            <el-tag type="success" effect="dark" round>{{ dorm.bed_no }} 号床</el-tag>
+          </div>
+        </div>
+        <div v-if="myStatus.state === '请假离宿' || myStatus.state === '请假外出'" class="leave-banner">
+          当前「{{ myStatus.state }}」{{ myStatus.note ? ' · ' + myStatus.note : '' }}，床位保留，返校后由辅导员确认销假即恢复在宿状态。
         </div>
         <div class="dc-grid">
           <div class="dc-item"><span>姓名</span><strong>{{ dorm.name }}</strong></div>
@@ -87,20 +98,44 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="moveVisible" title="申请调宿" width="460">
+    <el-dialog v-model="moveVisible" title="申请调宿" width="560">
       <el-form label-position="top">
         <el-form-item label="意向楼栋" required>
-          <el-select v-model="move.building" placeholder="选择目标楼栋" style="width: 100%">
-            <el-option v-for="b in buildings" :key="b.code" :label="`${b.name}（${b.gender}）`" :value="b.code" />
+          <el-select v-model="move.building" placeholder="选择目标楼栋" style="width: 100%" @change="onBuildingChange">
+            <el-option
+              v-for="b in freeBuildings"
+              :key="b.code"
+              :label="`${b.name}　空床 ${b.freeCount} 个 / ${b.roomCount} 间房`"
+              :value="b.code"
+            />
+          </el-select>
+          <p v-if="!freeBuildings.length" class="form-hint warn">当前没有与你性别匹配的空余床位，暂无法申请调宿。</p>
+        </el-form-item>
+
+        <el-form-item label="意向房间" required>
+          <el-select v-model="move.room" :disabled="!move.building" placeholder="选择有空床的房间" style="width: 100%" @change="onRoomChange">
+            <el-option v-for="r in roomOptions" :key="r.room_no" :label="`${r.room_no} 室　空床 ${r.beds.length} 个（${r.room_type}）`" :value="r.room_no" />
           </el-select>
         </el-form-item>
-        <el-form-item label="意向房间号" required>
-          <el-input v-model="move.room" placeholder="例：201" />
+
+        <el-form-item label="意向床位" required>
+          <div v-if="bedOptions.length" class="bed-picker">
+            <button
+              v-for="b in bedOptions"
+              :key="b.id"
+              type="button"
+              class="bed-chip"
+              :class="{ on: move.bedId === b.id }"
+              @click="move.bedId = b.id"
+            >{{ b.bed_no }} 号床</button>
+          </div>
+          <p v-else class="form-hint">请先选择楼栋与房间</p>
         </el-form-item>
+
         <el-form-item label="申请理由" required>
-          <el-input v-model="move.reason" type="textarea" :rows="3" placeholder="简要说明调宿原因" />
+          <el-input v-model="move.reason" type="textarea" :rows="3" placeholder="简要说明调宿原因（宿管与辅导员审批时会看到）" />
         </el-form-item>
-        <p class="move-tip">系统将校验目标楼栋性别属性与房间状态；宿管初审通过后，跨楼栋申请由辅导员复核。</p>
+        <p class="move-tip">空床数据实时读取台账：仅展示与你性别一致的楼栋，已被占用的床位不会出现在可选列表中；提交后床位被他人先占，系统会提示重新选择。</p>
       </el-form>
       <template #footer>
         <el-button @click="moveVisible = false">取消</el-button>
@@ -111,7 +146,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 
@@ -119,11 +154,19 @@ const dorm = ref(null)
 const roommates = ref([])
 const myTickets = ref([])
 const buildings = ref([])
+const freeBuildings = ref([])
+const freeRooms = ref([])
+const myStatus = reactive({ state: '', note: '', leave: null })
 const repairVisible = ref(false)
 const moveVisible = ref(false)
 const submitting = ref(false)
 const repair = reactive({ desc: '' })
-const move = reactive({ building: '', room: '', reason: '' })
+const move = reactive({ building: '', room: '', bedId: null, reason: '' })
+
+/** 当前所选楼栋下的房间（来自实时空床数据，只含有空床的房间） */
+const roomOptions = computed(() => freeRooms.value.filter((r) => r.building_code === move.building))
+/** 当前所选房间的空床 */
+const bedOptions = computed(() => roomOptions.value.find((r) => r.room_no === move.room)?.beds || [])
 
 function fmt(t) {
   return new Date(t).toLocaleString('zh-CN', { hour12: false })
@@ -138,11 +181,31 @@ function openRepair() {
   repairVisible.value = true
 }
 
-function openMove() {
+async function openMove() {
   move.building = ''
   move.room = ''
+  move.bedId = null
   move.reason = ''
   moveVisible.value = true
+  // 打开即拉取实时空床分布，让学生先看清哪里有床位
+  try {
+    const data = await api.get('/free-beds')
+    freeBuildings.value = data.buildings || []
+    freeRooms.value = data.rooms || []
+  } catch {
+    freeBuildings.value = []
+    freeRooms.value = []
+  }
+}
+
+function onBuildingChange() {
+  move.room = ''
+  move.bedId = null
+}
+
+function onRoomChange() {
+  // 默认选中第一个空床，减少一次点击
+  move.bedId = bedOptions.value[0]?.id ?? null
 }
 
 async function submitRepair() {
@@ -159,14 +222,17 @@ async function submitRepair() {
 }
 
 async function submitMove() {
-  if (!move.building || !move.room.trim() || !move.reason.trim()) return ElMessage.warning('请完整填写楼栋、房间号与理由')
+  if (!move.building || !move.room) return ElMessage.warning('请选择意向楼栋与房间')
+  if (!move.bedId) return ElMessage.warning('请选择意向床位')
+  if (!move.reason.trim()) return ElMessage.warning('请填写调宿理由，审批人需要据此判断')
   submitting.value = true
   try {
     const res = await api.post('/tickets', {
       type: '调宿',
       description: move.reason.trim(),
       targetBuilding: move.building,
-      targetRoom: move.room.trim()
+      targetRoom: move.room,
+      targetBedId: move.bedId
     })
     ElMessage.success(res.message)
     moveVisible.value = false
@@ -177,11 +243,14 @@ async function submitMove() {
 }
 
 onMounted(async () => {
-  const [data, tickets, b] = await Promise.all([api.get('/my-dorm'), api.get('/tickets/mine'), api.get('/buildings')])
+  const [data, tickets, b, st] = await Promise.all([
+    api.get('/my-dorm'), api.get('/tickets/mine'), api.get('/buildings'), api.get('/my-status').catch(() => null)
+  ])
   dorm.value = data.dorm
   roommates.value = data.roommates
   myTickets.value = tickets
   buildings.value = b
+  if (st) Object.assign(myStatus, st)
 })
 </script>
 
@@ -210,5 +279,13 @@ onMounted(async () => {
 .mate-bed { font-size: 11px; color: var(--ink-3); }
 .tickets-panel { margin-top: 16px; padding: 16px 18px; }
 .move-tip { font-size: 11px; color: var(--ink-3); line-height: 1.6; margin: 0; }
+.dc-tags { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.leave-banner { margin-top: 14px; font-size: 11.5px; color: #8a5a12; background: #fdf8ec; border: 1px solid #f2e3c2; border-left: 3px solid #c89b3c; border-radius: 6px; padding: 9px 11px; line-height: 1.7; }
+.form-hint { margin: 6px 0 0; font-size: 11px; color: var(--ink-3); }
+.form-hint.warn { color: #a04036; }
+.bed-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+.bed-chip { border: 1px solid #dbe7f8; background: #fff; color: #2456a6; font-size: 12px; padding: 7px 14px; border-radius: 6px; cursor: pointer; }
+.bed-chip:hover { background: #f2f7ff; }
+.bed-chip.on { background: #2456a6; border-color: #2456a6; color: #fff; }
 @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
 </style>

@@ -37,7 +37,17 @@
         <el-table-column label="住宿位置" width="120">
           <template #default="{ row }">{{ row.building_code ? `${row.building_code}-${row.room_no}` : '未分配' }}</template>
         </el-table-column>
-        <el-table-column prop="title" label="事项" min-width="240" show-overflow-tooltip />
+        <el-table-column prop="title" label="事项" min-width="190" show-overflow-tooltip />
+        <el-table-column label="申请说明（学生填写）" min-width="240">
+          <template #default="{ row }">
+            <div class="reason-cell">
+              <p>{{ row.description || '（学生未填写说明）' }}</p>
+              <span v-if="row.type === '调宿'" class="target">
+                意向 {{ row.target_room }}<template v-if="row.target_bed_no"> · {{ row.target_bed_no }} 号床</template>
+              </span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="优先级" width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="row.priority === '紧急' ? 'danger' : 'info'" effect="plain">{{ row.priority }}</el-tag>
@@ -60,11 +70,11 @@
               <el-button link type="primary" size="small" @click="finish(row)">完工登记</el-button>
             </template>
             <template v-else-if="row.type === '调宿' && row.status === '待初审'">
-              <el-button link type="primary" size="small" @click="act(row, 'approve', '初审通过后转辅导员复核，确认？')">初审通过</el-button>
+              <el-button link type="primary" size="small" @click="act(row, 'approve', `初审通过后转辅导员复核。学生理由：${row.description || '未填写'}｜意向：${row.target_room}${row.target_bed_no ? ' · ' + row.target_bed_no + ' 号床' : ''}`)">初审通过</el-button>
               <el-button link type="danger" size="small" @click="reject(row)">驳回</el-button>
             </template>
             <template v-else-if="row.type === '调宿' && row.status === '待复核'">
-              <el-button link type="primary" size="small" @click="act(row, 'approve', `执行调宿到 ${row.target_room}？将释放原床位并占用目标空床。`)">复核通过并执行</el-button>
+              <el-button link type="primary" size="small" @click="act(row, 'approve', `执行调宿到 ${row.target_room}${row.target_bed_no ? ' · ' + row.target_bed_no + ' 号床' : ''}？将释放原床位并占用目标空床。学生理由：${row.description || '未填写'}`)">复核通过并执行</el-button>
               <el-button link type="danger" size="small" @click="reject(row)">驳回</el-button>
             </template>
             <template v-else-if="row.type === '退宿' && row.status === '待审批'">
@@ -152,4 +162,6 @@ onMounted(load)
 .stu-cell strong { font-size: 12.5px; font-weight: 500; display: block; }
 .stu-cell span { font-size: 10.5px; color: var(--ink-3); }
 .done-text { font-size: 11.5px; color: #a2aec1; }
+.reason-cell p { margin: 0; font-size: 12px; color: var(--ink-2); line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.reason-cell .target { display: inline-block; margin-top: 4px; font-size: 10.5px; color: #5b7ba8; background: #f3f8ff; border: 1px solid #e2ecfb; border-radius: 3px; padding: 1px 6px; }
 </style>

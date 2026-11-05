@@ -409,6 +409,89 @@ router.get('/stats/pending', (req, res) => {
   res.json({ pending, freeBeds })
 })
 
+/* 增量迁移：调宿申请记录学生选定的目标床位 */
+try {
+  db.exec('ALTER TABLE tickets ADD COLUMN target_bed INTEGER')
+} catch { /* 列已存在，忽略 */ }
+
+/**
+ * 调宿可选空床分布：按楼栋聚合「房间 → 空闲床位」。
+ * 仅返回与学生同性别、房间状态可用的床位；不传 building 时返回全部可申请楼栋。
+ */
+router.get('/free-beds', (req, res) => {
+  const sid = db.prepare('SELECT student_id FROM users WHERE id = ?').get(req.user.id)?.student_id
+  if (!sid) return res.status(403).json({ message: '仅学生账号可查询空床分布' })
+  const stu = studentById(sid)
+  if (!stu) return res.status(404).json({ message: '学生档案不存在' })
+
+  const code = String(req.query.building || '').trim()
+  const params = [stu.gender]
+  let where = "b.status = '空闲' AND r.status = '可用' AND bl.gender = ?"
+  if (code) { where += ' AND bl.code = ?'; params.push(code) }
+
+  const rows = db.prepare(`
+    SELECT b.id AS bed_id, b.bed_no, r.room_no, r.floor, r.room_type,
+           bl.code AS building_code, bl.name AS building_name
+    FROM beds b
+    JOIN rooms r ON r.id = b.room_id
+    JOIN buildings bl ON bl.id = r.building_id
+    WHERE ${where}
+    ORDER BY bl.code, r.floor, r.room_no, b.bed_no
+  `).all(...params)
+
+  // 房间聚合：一次下发，前端直接渲染「楼栋 → 房间 → 空床号」
+  const roomMap = new Map()
+  for (const r of rows) {
+    const key = `${r.building_code}-${r.room_no}`
+    if (!roomMap.has(key)) {
+      roomMap.set(key, {
+        building_code: r.building_code,
+        building_name: r.building_name,
+        room_no: r.room_no,
+        floor: r.floor,
+        room_type: r.room_type,
+        beds: []
+      })
+    }
+    roomMap.get(key).beds.push({ id: r.bed_id, bed_no: r.bed_no })
+  }
+
+  const buildingMap = new Map()
+  for (const room of roomMap.values()) {
+    if (!buildingMap.has(room.building_code)) {
+      buildingMap.set(room.building_code, {
+        code: room.building_code, name: room.building_name, freeCount: 0, roomCount: 0
+      })
+    }
+    const b = buildingMap.get(room.building_code)
+    b.freeCount += room.beds.length
+    b.roomCount += 1
+  }
+
+  res.json({
+    gender: stu.gender,
+    buildings: [...buildingMap.values()],
+    rooms: [...roomMap.values()]
+  })
+})
+
+/** 当前登录学生的住宿状态（含生效中的请假单），避免前端用账号去匹配学号 */
+router.get('/my-status', (req, res) => {
+  const sid = db.prepare('SELECT student_id FROM users WHERE id = ?').get(req.user.id)?.student_id
+  if (!sid) return res.json({ state: '', note: '', updated_at: '', leave: null })
+  const st = db.prepare('SELECT state, note, updated_at FROM student_states WHERE student_id = ?').get(sid)
+  const leave = db.prepare(`
+    SELECT id, leave_type, start_date, end_date, days, status FROM leaves
+    WHERE student_id = ? AND status IN ('待审批', '已通过') ORDER BY created_at DESC LIMIT 1
+  `).get(sid)
+  res.json({
+    state: st?.state || '在宿',
+    note: st?.note || '',
+    updated_at: st?.updated_at || '',
+    leave: leave || null
+  })
+})
+
 router.get('/tickets', (req, res) => {
   const { type = '', status = '' } = req.query
   const where = ['1 = 1']
@@ -417,12 +500,13 @@ router.get('/tickets', (req, res) => {
   if (status) { where.push('t.status = ?'); params.push(status) }
   const rows = db.prepare(`
     SELECT t.*, s.name AS student_name, s.student_no, s.class_name,
-           bl.code AS building_code, r.room_no
+           bl.code AS building_code, r.room_no, tb.bed_no AS target_bed_no
     FROM tickets t
     JOIN students s ON s.id = t.student_id
     LEFT JOIN beds b ON b.student_id = s.id AND b.status = '已占用'
     LEFT JOIN rooms r ON r.id = b.room_id
     LEFT JOIN buildings bl ON bl.id = r.building_id
+    LEFT JOIN beds tb ON tb.id = t.target_bed
     WHERE ${where.join(' AND ')}
     ORDER BY t.created_at DESC
   `).all(...params)
@@ -433,11 +517,12 @@ router.post('/tickets', archiveGuard, requireRole('student'), (req, res) => {
   const sid = db.prepare('SELECT student_id FROM users WHERE id = ?').get(req.user.id)?.student_id
   if (!sid) return res.status(403).json({ message: '仅学生账号可提交申请' })
   const stu = studentById(sid)
-  const { type = '报修', description = '', targetBuilding = '', targetRoom = '' } = req.body || {}
+  const { type = '报修', description = '', targetBuilding = '', targetRoom = '', targetBedId = null } = req.body || {}
   if (!['报修', '调宿'].includes(type)) return res.status(400).json({ message: '不支持的申请类型' })
   if (!String(description).trim()) return res.status(400).json({ message: '请填写描述' })
 
   let target = null
+  let bedId = null
   if (type === '调宿') {
     const code = String(targetBuilding || '').trim()
     const roomNo = String(targetRoom || '').trim()
@@ -446,13 +531,21 @@ router.post('/tickets', archiveGuard, requireRole('student'), (req, res) => {
     if (!room) return res.status(400).json({ message: `目标房间 ${code}-${roomNo} 不存在` })
     if (room.bg !== stu.gender) return res.status(400).json({ message: '目标楼栋性别属性与学生不符，校验不通过' })
     if (room.status !== '可用') return res.status(400).json({ message: `目标房间当前状态为「${room.status}」，不可申请` })
+    // 学生自选床位：必须属于目标房间且仍空闲，避免提交瞬间被他人占用
+    if (targetBedId) {
+      const bed = db.prepare('SELECT * FROM beds WHERE id = ?').get(Number(targetBedId))
+      if (!bed) return res.status(400).json({ message: '所选床位不存在' })
+      if (bed.room_id !== room.id) return res.status(400).json({ message: '所选床位不属于目标房间' })
+      if (bed.status !== '空闲') return res.status(400).json({ message: `所选 ${bed.bed_no} 号床已被占用，请重新选择` })
+      bedId = bed.id
+    }
     target = `${code}-${roomNo}`
   }
 
   const now = nowIso()
-  const title = type === '报修' ? `报修：${String(description).slice(0, 24)}` : `调宿申请：意向 ${target}`
-  const id = Number(db.prepare('INSERT INTO tickets (type, student_id, title, description, status, target_room, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(type, sid, title, description, '待初审', target, now, now).lastInsertRowid)
+  const title = type === '报修' ? `报修：${String(description).slice(0, 24)}` : `调宿申请：意向 ${target}${bedId ? `（指定 ${db.prepare('SELECT bed_no FROM beds WHERE id = ?').get(bedId).bed_no} 号床）` : ''}`
+  const id = Number(db.prepare('INSERT INTO tickets (type, student_id, title, description, status, target_room, target_bed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(type, sid, title, description, '待初审', target, bedId, now, now).lastInsertRowid)
   writeAudit({ actor: stu.name, role: '学生', action: type === '报修' ? '提交报修单' : '提交调宿申请', target: `工单 #${id}`, beforeValue: '-', afterValue: target || '待受理', reason: description.slice(0, 40) })
   res.json({ message: type === '报修' ? '报修单已提交，等待宿管受理' : '调宿申请已提交，等待宿管初审', id })
 })
@@ -493,7 +586,11 @@ router.post('/tickets/:id/action', archiveGuard, requireRole('admin', 'counselor
         const room = db.prepare('SELECT r.*, bl.gender AS building_gender FROM rooms r JOIN buildings bl ON bl.id = r.building_id WHERE bl.code = ? AND r.room_no = ?').get(code, roomNo)
         if (!room) return res.status(400).json({ message: `目标房间 ${target} 不存在` })
         if (room.building_gender !== stu.gender) return res.status(400).json({ message: '目标楼栋性别与学生不符' })
-        const bed = db.prepare("SELECT * FROM beds WHERE room_id = ? AND status = '空闲' ORDER BY bed_no LIMIT 1").get(room.id)
+        // 优先分配学生指定的床位；该床若已被占用则回退到房间内任一空床
+        const picked = t.target_bed
+          ? db.prepare("SELECT * FROM beds WHERE id = ? AND room_id = ? AND status = '空闲'").get(t.target_bed, room.id)
+          : null
+        const bed = picked || db.prepare("SELECT * FROM beds WHERE room_id = ? AND status = '空闲' ORDER BY bed_no LIMIT 1").get(room.id)
         if (!bed) return res.status(400).json({ message: '目标房间暂无空闲床位' })
         const old = bedOfStudent(stu.id)
         if (old) db.prepare("UPDATE beds SET status = '空闲', student_id = NULL WHERE id = ?").run(old.bed_id)
@@ -561,7 +658,26 @@ router.post('/notices/:id/sign', requireRole('student'), (req, res) => {
 
 /* ===================== 请假与状态 ===================== */
 
+/* 状态口径迁移（幂等）：
+   1) 历史「请假外出」统一为「请假离宿」；
+   2) 已无生效请假单（未通过 / 已过期 / 已销假）却仍标记离宿的，自动校正回「在宿」。 */
+try {
+  db.exec("UPDATE student_states SET state = '请假离宿' WHERE state = '请假外出'")
+  db.exec(`
+    UPDATE student_states SET state = '在宿', note = '无生效请假单，已自动校正', updated_at = datetime('now')
+    WHERE state IN ('请假离宿', '请假外出')
+      AND NOT EXISTS (
+        SELECT 1 FROM leaves l
+        WHERE l.student_id = student_states.student_id
+          AND l.status = '已通过'
+          AND date('now') BETWEEN l.start_date AND l.end_date
+      )
+  `)
+} catch { /* 表结构差异时忽略 */ }
+
 router.get('/leaves', (req, res) => {
+  const sid = db.prepare('SELECT student_id FROM users WHERE id = ?').get(req.user.id)?.student_id
+  const onlyMine = req.user.role === 'student'
   const rows = db.prepare(`
     SELECT l.*, s.name AS student_name, s.student_no, s.class_name,
            bl.code AS building_code, r.room_no
@@ -569,8 +685,9 @@ router.get('/leaves', (req, res) => {
     LEFT JOIN beds b ON b.student_id = s.id AND b.status = '已占用'
     LEFT JOIN rooms r ON r.id = b.room_id
     LEFT JOIN buildings bl ON bl.id = r.building_id
+    ${onlyMine ? 'WHERE l.student_id = ?' : ''}
     ORDER BY l.created_at DESC
-  `).all()
+  `).all(...(onlyMine && sid ? [sid] : onlyMine ? [-1] : []))
   res.json(rows)
 })
 
@@ -596,9 +713,13 @@ router.post('/leaves/:id/review', archiveGuard, requireRole('admin', 'counselor'
   if (!leave) return res.status(404).json({ message: '请假单不存在' })
   if (action === 'approve') {
     db.prepare('UPDATE leaves SET status = ?, reviewer = ?, review_note = ? WHERE id = ?').run('已通过', req.user.name, note, id)
-    db.prepare(`INSERT INTO student_states (student_id, state, note, updated_at) VALUES (?, '请假外出', ?, ?)
-      ON CONFLICT(student_id) DO UPDATE SET state = '请假外出', note = excluded.note, updated_at = excluded.updated_at`)
-      .run(leave.student_id, `${leave.leave_type} ${leave.days} 天`, nowIso())
+    // 只有请假区间已开始才切换为「请假离宿」；未来请假保持「在宿」，避免状态与实际不符
+    const today = new Date().toLocaleDateString('sv-SE')
+    if (leave.start_date <= today && today <= leave.end_date) {
+      db.prepare(`INSERT INTO student_states (student_id, state, note, updated_at) VALUES (?, '请假离宿', ?, ?)
+        ON CONFLICT(student_id) DO UPDATE SET state = '请假离宿', note = excluded.note, updated_at = excluded.updated_at`)
+        .run(leave.student_id, `${leave.leave_type} ${leave.days} 天（${leave.start_date} ~ ${leave.end_date}）`, nowIso())
+    }
   } else {
     db.prepare('UPDATE leaves SET status = ?, reviewer = ?, review_note = ? WHERE id = ?').run('已驳回', req.user.name, note || '材料不齐', id)
   }
@@ -628,7 +749,7 @@ router.get('/status-board', (req, res) => {
     LEFT JOIN buildings bl ON bl.id = r.building_id
     LEFT JOIN student_states st ON st.student_id = s.id
     WHERE b.id IS NOT NULL
-    ORDER BY CASE COALESCE(st.state, '在宿') WHEN '未归' THEN 0 WHEN '晚归' THEN 1 WHEN '请假外出' THEN 2 WHEN '离校实习' THEN 3 ELSE 4 END, s.student_no
+    ORDER BY CASE COALESCE(st.state, '在宿') WHEN '未归' THEN 0 WHEN '晚归' THEN 1 WHEN '请假离宿' THEN 2 WHEN '请假外出' THEN 2 WHEN '离校实习' THEN 3 ELSE 4 END, s.student_no
     LIMIT 80
   `).all()
   res.json(rows)
