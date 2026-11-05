@@ -22,7 +22,7 @@
 
           <div class="ask-layout">
             <div class="chat">
-              <div ref="chatBody" class="chat-body">
+              <div ref="chatBody" class="chat-body" @scroll="onChatScroll">
                 <div v-if="!history.length" class="chat-empty">
                   <div class="ce-title">问一句，AI 会检索规章库后作答并标注条款</div>
                   <div class="ce-examples">
@@ -158,9 +158,20 @@ const aiBadgeTip = computed(() =>
     : '未配置 AI_API_KEY，回答来自本地规章关键词匹配'
 )
 
-function scrollBottom() {
+/** 贴底跟随：用户停留在底部附近（40px 容差）时自动跟随新消息；向上翻阅历史时不打扰 */
+const stickToBottom = ref(true)
+
+function onChatScroll() {
+  const el = chatBody.value
+  if (!el) return
+  stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+}
+
+function scrollBottom(force = false) {
+  if (!force && !stickToBottom.value) return
   nextTick(() => {
-    if (chatBody.value) chatBody.value.scrollTop = chatBody.value.scrollHeight
+    const el = chatBody.value
+    if (el) el.scrollTop = el.scrollHeight
   })
 }
 
@@ -238,10 +249,11 @@ async function ask() {
     escalated: false,
     degraded: false
   })
-  history.value.unshift(item)
+  history.value.push(item)
   question.value = ''
   asking.value = true
-  scrollBottom()
+  stickToBottom.value = true
+  scrollBottom(true)
 
   const token = localStorage.getItem('dorm_token')
   const ctrl = new AbortController()
@@ -306,7 +318,8 @@ async function retry(item) {
 async function loadHistory() {
   const rows = await api.get('/consultations')
   if (!history.value.length) {
-    history.value = rows.slice(0, 5).map((r) => ({
+    // 接口按时间倒序返回，反转后最早在上、最新在底，与聊天流方向一致
+    history.value = rows.slice(0, 5).reverse().map((r) => ({
       key: ++seq,
       question: r.question,
       answer: r.answer,
@@ -350,6 +363,7 @@ async function review(row, action) {
 onMounted(async () => {
   rules.value = await fetchRules()
   await Promise.all([loadAiStatus(), loadHistory(), loadDeclarations()])
+  scrollBottom(true)
 })
 
 onUnmounted(() => streamCtrl?.abort())
