@@ -1,0 +1,68 @@
+# ---------- 依赖与构建产物 ----------
+node_modules/
+dist/
+dist-ssr/
+.vite/
+coverage/
+*.local
+
+# ---------- 运行时数据（含 SQLite 库、WAL 与备份，不入库） ----------
+server/data/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backup-*.db
+
+# ---------- 密钥与凭据（严禁提交） ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+credentials*.json
+secrets*.json
+*secret*
+!*.example
+
+# 部署脚本 / 服务器信息（含密码或主机细节）
+deploy_*.sh
+deploy_*.py
+deploy_*.mjs
+*.deploy
+*_credentials*
+
+# ---------- 日志与临时文件 ----------
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+tmp/
+temp/
+*.tmp
+
+# ---------- 本地脚本与截图产物 ----------
+shot*.mjs
+_*.mjs
+_*.png
+_check*
+*.png.tmp
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 工具与平台私有目录 ----------
+.workbuddy/
+.wbapp_*.genie
+!.github/

@@ -1,0 +1,181 @@
+/* ============================================================
+   方案 A · 警务蓝「严谨交付」 全局设计系统
+   主色：深警蓝 #0F2547 / 操作蓝 #2456A6 / 警徽金 #C89B3C
+   ============================================================ */
+:root {
+  /* 方案 A 色板 */
+  --navy-900: #0F2547;
+  --navy-800: #16325F;
+  --navy-700: #1E3A6E;
+  --navy-100: #E8EEF7;
+  --brand: #2456A6;
+  --brand-dark: #1C4587;
+  --gold: #C89B3C;
+  --gold-soft: #F7EFDD;
+
+  --ink: #1F2A3D;
+  --ink-2: #4A5A72;
+  --ink-3: #8593AB;
+  --line: #DDE4EF;
+  --bg: #F4F6FA;
+
+  --sidebar: var(--navy-900);
+  --sidebar-2: var(--navy-800);
+
+  --ok: #2E8B57;
+  --warn: #D98416;
+  --danger: #C0392B;
+
+  --radius: 8px;
+
+  /* Element Plus 主题对齐（方案 A 操作蓝） */
+  --el-color-primary: #2456A6;
+  --el-color-primary-light-3: #5079BD;
+  --el-color-primary-light-5: #7E9BD0;
+  --el-color-primary-light-7: #B3C4E2;
+  --el-color-primary-light-8: #CCD7EC;
+  --el-color-primary-light-9: #EAF1FB;
+  --el-color-primary-dark-2: #1C4587;
+  --el-color-success: #2E8B57;
+  --el-color-warning: #D98416;
+  --el-color-danger: #C0392B;
+  --el-color-error: #C0392B;
+  --el-border-radius-base: 4px;
+  --el-text-color-primary: var(--ink);
+  --el-text-color-regular: var(--ink-2);
+  --el-border-color: var(--line);
+  --el-border-color-light: var(--line);
+  --el-border-color-lighter: #E9EEF6;
+  --el-fill-color-light: #F4F6FA;
+  --el-font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app { height: 100%; margin: 0; }
+
+body {
+  font-family: var(--el-font-family);
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+.page { padding: 20px 24px 32px; }
+
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+/* 方案 A：页标题左侧警徽金竖标 */
+.page-title {
+  position: relative; font-size: 20px; font-weight: 700; letter-spacing: .3px;
+  margin: 0 0 6px; padding-left: 12px; color: var(--navy-900);
+}
+.page-title::before {
+  content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 4px; height: 17px; border-radius: 2px; background: var(--gold);
+}
+.page-desc { font-size: 13px; color: var(--ink-3); margin: 0; line-height: 1.6; }
+
+.panel {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(15, 37, 71, .05);
+}
+
+/* 方案 A：面板标题统一深蓝 + 金色短标 */
+.block-head h3 { position: relative; padding-left: 11px; }
+.block-head h3::before {
+  content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 4px; height: 14px; border-radius: 2px; background: var(--gold);
+}
+
+.el-button--primary { --el-button-bg-color: var(--brand); --el-button-border-color: var(--brand); --el-button-hover-bg-color: var(--brand-dark); --el-button-hover-border-color: var(--brand-dark); }
+
+.el-card, .el-dialog { border-radius: var(--radius); }
+
+/* ===== 方案 A：Element Plus 组件统一 ===== */
+.el-tabs__item { font-size: 13px; color: var(--ink-2); }
+.el-tabs__item.is-active { color: var(--brand); font-weight: 600; }
+.el-tabs__active-bar { background-color: var(--brand); height: 2px; }
+.el-tabs__nav-wrap::after { background-color: var(--line); height: 1px; }
+
+.el-table { --el-table-border-color: #EDF1F7; font-size: 12.5px; }
+.el-table th.el-table__cell { background: #F8FAFD; color: var(--ink-2); font-weight: 600; padding: 9px 0; }
+.el-table td.el-table__cell { padding: 9px 0; }
+.el-table__body tr:hover > td.el-table__cell { background: #F7F9FD !important; }
+
+.el-dialog__header { padding: 16px 20px; margin-right: 0; border-bottom: 1px solid var(--line); }
+.el-dialog__title { font-size: 15px; font-weight: 700; color: var(--navy-900); }
+.el-dialog__body { padding: 18px 20px; }
+.el-dialog__footer { padding: 12px 20px 18px; border-top: 1px solid #F0F3F8; }
+.el-drawer__header { margin-bottom: 12px; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); color: var(--navy-900); font-weight: 700; font-size: 15px; }
+.el-drawer__body { padding: 16px 20px; }
+
+.el-form-item__label { color: var(--ink-2); font-weight: 500; }
+.el-input__wrapper, .el-textarea__inner, .el-select__wrapper { box-shadow: 0 0 0 1px var(--line) inset; border-radius: 4px; }
+.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px var(--brand) inset; }
+
+.el-tag { border-radius: 4px; font-weight: 500; }
+.el-button { border-radius: 4px; font-weight: 500; }
+.el-button--default:not(.is-text):hover { color: var(--brand); border-color: var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); }
+.el-button--primary { font-weight: 600; }
+
+.el-pagination { --el-pagination-button-color: var(--ink-2); }
+.el-pagination.is-background .el-pager li.is-active { background: var(--brand); }
+
+.el-empty__description p { color: var(--ink-3); font-size: 12.5px; }
+.el-message-box { border-radius: var(--radius); }
+.el-message-box__title { font-size: 15px; font-weight: 700; color: var(--navy-900); }
+
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #C9D3E3; border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 方案 A 指标卡：顶部色条 + 左对齐布局 */
+.stat-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--brand);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.stat-card.tone-ok { border-top-color: var(--ok); }
+.stat-card.tone-warn { border-top-color: var(--warn); }
+.stat-card.tone-danger { border-top-color: var(--danger); }
+.stat-card.tone-gold { border-top-color: var(--gold); }
+.stat-icon { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; flex: none; }
+.stat-label { font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+.stat-value { font-size: 22px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--navy-900); }
+.stat-value small { font-size: 12px; color: var(--ink-3); font-weight: 400; margin-left: 3px; }
+
+/* 方案 A 七阶段交付链路 stepper（供工作台等页面复用） */
+.stage-stepper { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 20px; }
+.stage-stepper .ss-title { font-size: 13px; color: var(--ink-2); font-weight: 600; margin-bottom: 14px; }
+.ss-steps { display: flex; align-items: flex-start; }
+.ss-step { flex: 1; text-align: center; position: relative; }
+.ss-step .node {
+  width: 28px; height: 28px; border-radius: 50%; margin: 0 auto 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; background: var(--line); color: var(--ink-3);
+}
+.ss-step .lbl { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.ss-step.done .node { background: var(--ok); color: #fff; }
+.ss-step.done .lbl { color: var(--ink-2); }
+.ss-step.cur .node { background: var(--brand); color: #fff; box-shadow: 0 0 0 4px var(--navy-100); }
+.ss-step.cur .lbl { color: var(--brand); font-weight: 700; }
+.ss-step::after {
+  content: ""; position: absolute; top: 13px; left: calc(50% + 18px);
+  width: calc(100% - 36px); height: 2px; background: var(--line);
+}
+.ss-step.done::after, .ss-step.cur::after { background: var(--ok); }
+.ss-step:last-child::after { display: none; }
+
+@media (max-width: 1180px) {
+  .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
