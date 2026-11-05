@@ -27,19 +27,19 @@
 
 | 登录 | 数据看板 |
 | --- | --- |
-| ![登录](docs/screenshots/login.png) | ![数据看板](docs/screenshots/dashboard.png) |
+| ![登录](docs/screenshots/login-v2.png) | ![数据看板](docs/screenshots/dashboard-v2.png) |
 
 | 床位台账 | 智能分配 |
 | --- | --- |
-| ![床位台账](docs/screenshots/beds.png) | ![智能分配](docs/screenshots/allocate.png) |
+| ![床位台账](docs/screenshots/beds-v2.png) | ![智能分配](docs/screenshots/allocate-v2.png) |
 
 | 交付验收归档 | 宿管通讯录 |
 | --- | --- |
-| ![交付验收](docs/screenshots/delivery.png) | ![通讯录](docs/screenshots/contacts.png) |
+| ![交付验收](docs/screenshots/delivery-v2.png) | ![通讯录](docs/screenshots/contacts-v2.png) |
 
 | 导入与校验 | 业务审批与工单 |
 | --- | --- |
-| ![导入校验](docs/screenshots/import.png) | ![工单](docs/screenshots/tickets.png) |
+| ![导入校验](docs/screenshots/import-v2.png) | ![工单](docs/screenshots/tickets-v2.png) |
 
 ---
 
