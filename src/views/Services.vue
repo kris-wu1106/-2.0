@@ -59,6 +59,13 @@
               </div>
 
               <div class="chat-input">
+                <button
+                  v-if="history.length"
+                  class="clear-btn"
+                  :disabled="asking"
+                  title="删除当前会话的全部咨询记录"
+                  @click="clearChat"
+                >清空记录</button>
                 <el-input
                   v-model="question"
                   placeholder="如：电饭煲能不能带？"
@@ -132,7 +139,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
 const role = localStorage.getItem('dorm_role')
@@ -308,6 +315,38 @@ function stop() {
   streamCtrl?.abort()
 }
 
+/**
+ * 清空当前会话聊天记录：确认弹窗 → 调用后端删除 → 前后端状态同步。
+ * 边界：无记录不给入口（按钮隐藏）、回答进行中禁止清空、取消/失败时界面数据保持不变。
+ */
+async function clearChat() {
+  if (asking.value || !history.value.length) return
+  let confirmed = false
+  try {
+    await ElMessageBox.confirm(
+      '将删除当前会话的全部咨询记录（含服务端存档），删除后不可恢复。确认清空吗？',
+      '清空聊天记录',
+      { confirmButtonText: '确认清空', cancelButtonText: '取消', type: 'warning' }
+    )
+    confirmed = true
+  } catch {
+    return // 用户取消，界面不动
+  }
+  if (!confirmed) return
+
+  try {
+    const res = await api.delete('/consultations')
+    // 后端已删除成功，同步清空本地状态：消息列表、key 计数、贴底跟随
+    history.value = []
+    seq = 0
+    stickToBottom.value = true
+    question.value = ''
+    ElMessage.success(res.message || '聊天记录已清空')
+  } catch {
+    // 请求失败：拦截器已提示错误，本地记录保持原状，与服务端数据一致
+  }
+}
+
 async function retry(item) {
   if (asking.value) return
   history.value = history.value.filter((h) => h.key !== item.key)
@@ -422,6 +461,11 @@ onUnmounted(() => streamCtrl?.abort())
 .clause.esc { color: #b97a10; }
 
 .chat-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); background: #fff; border-radius: 0 0 10px 10px; }
+
+/* 清空记录按钮 */
+.clear-btn { flex: none; border: 1px solid #eddcd9; background: #fff; color: #a04036; font-size: 12px; padding: 0 12px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.clear-btn:hover:not(:disabled) { background: #fdf3f2; border-color: #e3c6c2; }
+.clear-btn:disabled { opacity: .5; cursor: not-allowed; }
 
 .rules { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; max-height: 520px; overflow-y: auto; }
 .rules-head { font-size: 13px; font-weight: 600; margin-bottom: 10px; }

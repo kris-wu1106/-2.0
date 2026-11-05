@@ -658,6 +658,35 @@ router.get('/consultations', (req, res) => {
 })
 
 /**
+ * 清空聊天记录
+ * 学生：仅删除本人咨询；宿管/辅导员：清空全部（列表本就是全局视图）。
+ * 空记录返回 cleared: 0；删除数写入审计日志，保证操作可追溯。
+ */
+router.delete('/consultations', archiveGuard, (req, res) => {
+  const manageAll = ['admin', 'counselor'].includes(req.user.role)
+  let sid = null
+  let info
+  if (manageAll) {
+    info = db.prepare('DELETE FROM consultations').run()
+  } else {
+    sid = db.prepare('SELECT student_id FROM users WHERE id = ?').get(req.user.id)?.student_id
+    if (!sid) return res.json({ message: '当前账号没有咨询记录', cleared: 0 })
+    info = db.prepare('DELETE FROM consultations WHERE student_id = ?').run(sid)
+  }
+  if (!info.changes) return res.json({ message: '暂无咨询记录，无需清空', cleared: 0 })
+  writeAudit({
+    actor: req.user.name,
+    role: manageAll ? '宿管' : '学生',
+    action: '清空咨询记录',
+    target: manageAll ? '全部咨询记录' : '本人咨询记录',
+    beforeValue: `${info.changes} 条`,
+    afterValue: '0 条',
+    reason: '用户主动清空'
+  })
+  res.json({ message: `已清空 ${info.changes} 条咨询记录`, cleared: info.changes })
+})
+
+/**
  * 智能问答（SSE 流式）
  * 事件：meta（模式与命中条款）→ delta（增量文本，可多次）→ done（完整回答）
  *      失败时：error（含降级兜底答案）
