@@ -1,5 +1,6 @@
 import express from 'express'
 import { db, writeAudit } from './db.js'
+import { aiStatus, isAiConfigured, retrieve, buildKnowledge, buildMessages, chatStream, chatOnce, localAnswer } from './ai.js'
 
 /* ===================== 扩展表结构 ===================== */
 
@@ -124,6 +125,7 @@ CREATE TABLE IF NOT EXISTS consultations (
   answer TEXT,
   matched_clause TEXT,
   escalated INTEGER DEFAULT 0,
+  source TEXT DEFAULT 'rule',
   created_at TEXT NOT NULL
 );
 
@@ -634,8 +636,18 @@ router.get('/status-board', (req, res) => {
 
 /* ===================== 咨询与申报 ===================== */
 
+/* 增量迁移：旧库补 source 列，标记回答来自 AI 还是本地规则 */
+try {
+  db.exec("ALTER TABLE consultations ADD COLUMN source TEXT DEFAULT 'rule'")
+} catch { /* 列已存在，忽略 */ }
+
 router.get('/regulations', (req, res) => {
   res.json(db.prepare('SELECT * FROM regulations ORDER BY id').all())
+})
+
+/** AI 服务配置状态（脱敏），前端据此显示「AI 在线 / 本地规章库」徽章 */
+router.get('/ai/status', (req, res) => {
+  res.json(aiStatus())
 })
 
 router.get('/consultations', (req, res) => {
@@ -645,22 +657,129 @@ router.get('/consultations', (req, res) => {
   `).all())
 })
 
-router.post('/consultations', archiveGuard, (req, res) => {
+/**
+ * 智能问答（SSE 流式）
+ * 事件：meta（模式与命中条款）→ delta（增量文本，可多次）→ done（完整回答）
+ *      失败时：error（含降级兜底答案）
+ * AI 未配置或调用失败时自动降级为本地规章匹配，保证接口永远有回答。
+ */
+router.post('/consultations/stream', archiveGuard, async (req, res) => {
+  const question = String(req.body?.question || '').trim()
+  if (!question) return res.status(400).json({ message: '请输入要咨询的问题' })
+
+  const sid = db.prepare('SELECT student_id FROM users WHERE id = ?').get(req.user.id)?.student_id
+  if (!sid) return res.status(400).json({ message: '仅学生账号可发起咨询' })
+
+  const kb = buildKnowledge(db)
+  const hits = retrieve(db, question)
+  const top = hits.length ? hits[0] : null
+  const matchedPayload = top ? { title: top.title, clause_no: top.clause_no, content: top.content, citation: top.citation, kind: top.kind } : null
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no') // 关闭 Nginx 缓冲，保证逐字下发
+  res.flushHeaders?.()
+
+  let closed = false
+  res.on('close', () => { closed = true })
+
+  const send = (event, data) => {
+    if (closed) return
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  }
+
+  const persist = (answer, source, escalated) => {
+    const clause = top && !top.weak ? top.clause_no : (escalated ? '未命中' : (top?.clause_no || '未命中'))
+    try {
+      db.prepare('INSERT INTO consultations (student_id, question, answer, matched_clause, escalated, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(sid, question, answer, clause, escalated ? 1 : 0, source, nowIso())
+    } catch {
+      /* 落库失败不影响回答下发 */
+    }
+  }
+
+  const mode = isAiConfigured() ? 'ai' : 'rule'
+  const st = aiStatus()
+  send('meta', {
+    mode,
+    model: st.model,
+    provider: st.provider,
+    hits: hits.map((h) => ({ title: h.title, clause_no: h.clause_no, score: Math.round(h.score) }))
+  })
+
+  // 未配置模型：直接走本地规则，协议保持一致
+  if (mode === 'rule') {
+    const answer = localAnswer(question, hits)
+    send('delta', { text: answer })
+    persist(answer, 'rule', !top || top.weak)
+    send('done', { answer, matched: matchedPayload, escalated: !top || top.weak, mode: 'rule' })
+    return res.end()
+  }
+
+  const ctrl = new AbortController()
+  res.on('close', () => ctrl.abort())
+
+  try {
+    const { text, usage } = await chatStream({
+      messages: buildMessages(question, kb, hits),
+      onDelta: (delta) => send('delta', { text: delta }),
+      signal: ctrl.signal
+    })
+    const answer = text.trim()
+    if (!answer) throw Object.assign(new Error('模型返回空内容'), { code: 'EMPTY' })
+    persist(answer, 'ai', !top || top.weak)
+    send('done', { answer, matched: matchedPayload, escalated: !top || top.weak, mode: 'ai', usage })
+    res.end()
+  } catch (err) {
+    if (closed) return
+    // AI 失败 → 本地规则兜底，前端同时展示错误原因
+    const fallback = localAnswer(question, hits)
+    send('error', {
+      code: err.code || 'UNKNOWN',
+      message: err.message || 'AI 服务异常，已切换为本地规章匹配',
+      fallback,
+      matched: matchedPayload,
+      escalated: !top || top.weak
+    })
+    persist(fallback, 'fallback', !top || top.weak)
+    res.end()
+  }
+})
+
+/** 非流式版本：保留给不支持 SSE 的调用方与回归测试 */
+router.post('/consultations', archiveGuard, async (req, res) => {
   const question = String(req.body?.question || '').trim()
   if (!question) return res.status(400).json({ message: '请输入要咨询的问题' })
   const sid = db.prepare('SELECT student_id FROM users WHERE id = ?').get(req.user.id)?.student_id
-  const regs = db.prepare('SELECT * FROM regulations').all()
-  let matched = null
-  for (const r of regs) {
-    const keys = r.keywords.split(',').filter(Boolean)
-    if (keys.some((k) => question.includes(k))) { matched = r; break }
+  const kb = buildKnowledge(db)
+  const hits = retrieve(db, question)
+  const top = hits.length ? hits[0] : null
+
+  let answer = ''
+  let source = 'rule'
+  if (isAiConfigured()) {
+    try {
+      const { text } = await chatOnce({ messages: buildMessages(question, kb, hits) })
+      answer = text.trim()
+      source = 'ai'
+    } catch {
+      answer = localAnswer(question, hits)
+      source = 'fallback'
+    }
+  } else {
+    answer = localAnswer(question, hits)
   }
-  const answer = matched
-    ? `依据《${matched.title}》${matched.clause_no}：${matched.content}`
-    : '现有规章文件未覆盖该物品，已转生活部人工问询，通常 1 个工作日内答复。'
-  db.prepare('INSERT INTO consultations (student_id, question, answer, matched_clause, escalated, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(sid, question, answer, matched ? matched.clause_no : '未命中', matched ? 0 : 1, nowIso())
-  res.json({ answer, matched: matched ? { title: matched.title, clause_no: matched.clause_no, content: matched.content } : null, escalated: !matched })
+
+  const escalated = !top || top.weak
+  db.prepare('INSERT INTO consultations (student_id, question, answer, matched_clause, escalated, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(sid, question, answer, top ? top.clause_no : '未命中', escalated ? 1 : 0, source, nowIso())
+  res.json({
+    answer,
+    mode: source,
+    matched: top ? { title: top.title, clause_no: top.clause_no, content: top.content, citation: top.citation, kind: top.kind } : null,
+    escalated
+  })
 })
 
 router.get('/declarations', (req, res) => {

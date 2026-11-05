@@ -10,8 +10,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 服务器地址 | http://8.134.187.209:4321 |
-| 云端预览（HTTPS） | https://gxfc-dorm-platform.app.workbuddy.host/?sharecode=DFWB4UHMG7 |
+| 访问地址 | http://8.134.187.209:4321 |
 | 宿管 / 后勤管理员 | `suguan` / `123456` |
 | 辅导员 | `fudaoyuan` / `123456` |
 | 学生 | `20260101` / `123456` |
@@ -19,27 +18,25 @@
 
 > 演示环境使用种子数据（7 栋宿舍、1512 张床位、1176 名学生、28 个区队），可自由操作，数据每日重置。
 
-界面采用**方案 A「警务蓝 · 严谨交付」**视觉基线：深警蓝侧栏（#0F2547）+ 操作蓝（#2456A6）+ 警徽金（#C89B3C）点缀，导航按「交付主线 / 台账与业务 / 生活服务 / 系统」四组组织，工作台提供七阶段交付链路与实时待办聚合。
-
 ---
 
 ## 界面预览
 
 | 登录 | 数据看板 |
 | --- | --- |
-| ![登录](docs/screenshots/login-v2.png) | ![数据看板](docs/screenshots/dashboard-v2.png) |
+| ![登录](docs/screenshots/login.png) | ![数据看板](docs/screenshots/dashboard.png) |
 
 | 床位台账 | 智能分配 |
 | --- | --- |
-| ![床位台账](docs/screenshots/beds-v2.png) | ![智能分配](docs/screenshots/allocate-v2.png) |
+| ![床位台账](docs/screenshots/beds.png) | ![智能分配](docs/screenshots/allocate.png) |
 
 | 交付验收归档 | 宿管通讯录 |
 | --- | --- |
-| ![交付验收](docs/screenshots/delivery-v2.png) | ![通讯录](docs/screenshots/contacts-v2.png) |
+| ![交付验收](docs/screenshots/delivery.png) | ![通讯录](docs/screenshots/contacts.png) |
 
 | 导入与校验 | 业务审批与工单 |
 | --- | --- |
-| ![导入校验](docs/screenshots/import-v2.png) | ![工单](docs/screenshots/tickets-v2.png) |
+| ![导入校验](docs/screenshots/import.png) | ![工单](docs/screenshots/tickets.png) |
 
 ---
 
@@ -243,6 +240,21 @@ import_batches (导入批次)  export_records (导出留痕)  change_orders (变
 - 输出指标：规则满足率、区队聚合度、未分配人数
 
 ### 3. 交付验收清单
+
+后端每次请求**实时计算**，不做缓存；前端在导出、提交变更单等操作后立即全量刷新，并对窗口重新聚焦做节流刷新，避免出现「操作已完成但清单还显示未通过」的状态滞后。
+
+### 4. AI 智能问答（违禁品咨询）
+
+`server/ai.js` 提供基于 **OpenAI 兼容协议** 的模型适配层（默认对接阿里云百炼/通义千问，可切换 DeepSeek、Kimi、自建 vLLM 等）。在 `.env` 配置 `AI_API_KEY` 后，`POST /api/consultations/stream` 以 SSE 流式返回：
+
+```
+检索增强（RAG）：regulations + standard_items 全量注入 system prompt
+→ 模型只负责组织语言，条款号必须来自检索结果，禁止编造
+→ meta（模式/命中条款）→ delta（增量文本）→ done（完整回答）
+```
+
+可靠性设计：未配置 Key 或调用失败（401/429/超时/网络）时**自动降级**为本地规章匹配引擎（别名归一 + 多候选打分 + 干扰词剔除），接口永远有回答；前端展示「AI 在线 / 本地规章库」徽章、加载动画、流式光标、错误条与重试按钮。咨询记录落库并标记 `source`（ai / rule / fallback）。
+
 
 后端每次请求**实时计算**，不做缓存；前端在导出、提交变更单等操作后立即全量刷新，并对窗口重新聚焦做节流刷新，避免出现「操作已完成但清单还显示未通过」的状态滞后。
 
